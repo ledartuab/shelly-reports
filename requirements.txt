@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+requests
+google-cloud-firestore
+reportlab
+matplotlib
+pytz
+python-dateutil
