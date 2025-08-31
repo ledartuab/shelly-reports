@@ -481,3 +481,51 @@ async def report_preview(period: str = "weekly"):
     agg = aggregate_period(start_local, end_local)
     pdf_bytes = build_pdf(title, start_local, end_local, agg)
     return Response(content=pdf_bytes, media_type="application/pdf")
+    import os
+from flask import Flask
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+import tempfile
+
+app = Flask(__name__)
+
+EMAIL_USER = os.getenv("ledartuab@gmail.com")
+EMAIL_PASS = os.getenv("ahiuzhqonqqdkesf")
+EMAIL_TO   = os.getenv("petras@ledart.lt")
+
+@app.get("/test_email")
+def test_email():
+    try:
+        # Sugeneruoja paprastą PDF
+        tmpfile = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        c = canvas.Canvas(tmpfile.name, pagesize=A4)
+        c.drawString(100, 750, "Testinė PDF ataskaita iš Cloud Run 🚀")
+        c.save()
+
+        # Paruošia laišką
+        msg = MIMEMultipart()
+        msg["From"] = EMAIL_USER
+        msg["To"] = EMAIL_TO
+        msg["Subject"] = "Testinis laiškas su PDF"
+
+        with open(tmpfile.name, "rb") as f:
+            part = MIMEApplication(f.read(), Name="testas.pdf")
+            part["Content-Disposition"] = 'attachment; filename="testas.pdf"'
+            msg.attach(part)
+
+        # SMTP prisijungimas prie Gmail
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL_USER, EMAIL_PASS)
+            server.send_message(msg)
+
+        return {"status": "OK", "message": "Laiškas išsiųstas"}
+    except Exception as e:
+        return {"status": "ERROR", "message": str(e)}
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)
+
+
