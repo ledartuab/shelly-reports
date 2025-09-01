@@ -13,10 +13,9 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 import uvicorn
 
-# --- FastAPI ---
 app = FastAPI(title="Shelly Reports Service")
 
-# --- Aplinkos kintamieji ---
+# Aplinkos kintamieji
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 EMAIL_TO   = os.getenv("EMAIL_TO")
@@ -26,12 +25,8 @@ AUTH_KEY   = os.getenv("AUTH_KEY")
 DAY_TARIFF = 0.305
 NIGHT_TARIFF = 0.255
 
-# --- Gauti hourly duomenis iš Shelly Cloud Pro (EMData) ---
+# --- Shelly Cloud Pro hourly duomenys ---
 def get_shelly_data(start: datetime, end: datetime):
-    """
-    Gražina hourly kWh per dienas.
-    Formatu: {'YYYY-MM-DD': {0: 0.5, 1:0.6, ..., 23:0.7}, ...}
-    """
     data = {}
     start_str = start.strftime("%Y-%m-%d")
     end_str = end.strftime("%Y-%m-%d")
@@ -50,7 +45,6 @@ def get_shelly_data(start: datetime, end: datetime):
             data[day] = {int(h): float(kwh) for h, kwh in hours.items()}
     except Exception as e:
         print("Klaida gaunant Shelly duomenis:", e)
-        # Jei klaida, demo duomenys
         cur = start
         while cur <= end:
             d = cur.strftime("%Y-%m-%d")
@@ -58,12 +52,8 @@ def get_shelly_data(start: datetime, end: datetime):
             cur += timedelta(days=1)
     return data
 
-# --- Apskaičiuoti dienų suvartojimą su tarifais ---
+# --- Apskaičiuoti dienų suvartojimą ---
 def calculate_consumption(start: datetime, end: datetime):
-    """
-    Dieninis/naktinis tarifas pagal darbo dienas/savaitgalius.
-    Grąžina: {'YYYY-MM-DD': {'kwh': x, 'eur': y, 'day_kwh': z, 'night_kwh': t}}
-    """
     days = {}
     shelly_data = get_shelly_data(start, end)
     cur = start
@@ -89,16 +79,14 @@ def calculate_consumption(start: datetime, end: datetime):
         cur += timedelta(hours=1)
     return days
 
-# --- PDF generavimas su lentele ir grafiku ---
+# --- PDF generavimas ---
 def generate_pdf_report(days: dict, filename: str, title: str):
     doc = SimpleDocTemplate(filename, pagesize=A4)
     styles = getSampleStyleSheet()
     elements = []
-
     elements.append(Paragraph(title, styles["Title"]))
     elements.append(Spacer(1, 12))
 
-    # Lentelė
     data_table = [["Data", "Suvartota kWh", "Kaina €", "Dieninis kWh", "Naktinis kWh"]]
     total_kwh, total_eur, total_day, total_night = 0,0,0,0
     for d, vals in sorted(days.items()):
@@ -124,7 +112,6 @@ def generate_pdf_report(days: dict, filename: str, title: str):
     elements.append(table)
     elements.append(Spacer(1, 24))
 
-    # Grafikas
     dates = [d for d, _ in sorted(days.items())]
     day_values = [vals['day_kwh'] for _, vals in sorted(days.items())]
     night_values = [vals['night_kwh'] for _, vals in sorted(days.items())]
@@ -145,7 +132,7 @@ def generate_pdf_report(days: dict, filename: str, title: str):
 
     doc.build(elements)
 
-# --- Siųsti PDF paštu ---
+# --- Siųsti PDF ---
 def send_email(pdf_file, subject):
     msg = MIMEMultipart()
     msg["From"] = EMAIL_USER
@@ -162,7 +149,7 @@ def send_email(pdf_file, subject):
         server.send_message(msg)
 
 # --- Endpoint praėjusio mėnesio ataskaitai ---
-@app.get("/monthly_report")
+@app.get("/previous_month_report")
 def previous_month_report():
     today = datetime.now()
     first_day_this_month = today.replace(day=1)
@@ -174,8 +161,6 @@ def previous_month_report():
     send_email(pdf_file, f"Elektros ataskaita: {first_day_prev_month.strftime('%B %Y')}")
     return {"status": "ok", "message": "Praėjusio mėnesio ataskaita išsiųsta"}
 
-# --- Uvicorn ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
-
