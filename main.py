@@ -1,145 +1,112 @@
 import os
-import smtplib
+import csv
 import tempfile
 from datetime import datetime, timedelta
-import requests
 import matplotlib.pyplot as plt
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
+import smtplib
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 import uvicorn
 
-app = FastAPI(title="Shelly Reports Service")
+app = FastAPI(title="Shelly CSV Reports Service")
 
 # --- Aplinkos kintamieji ---
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 EMAIL_TO   = os.getenv("EMAIL_TO")
-DEVICE_ID  = os.getenv("DEVICE_ID")
-AUTH_KEY   = os.getenv("AUTH_KEY")
+CSV_FILE   = os.getenv("CSV_FILE", "shelly_data.csv")
 
 DAY_TARIFF = 0.305
 NIGHT_TARIFF = 0.255
 
-# --- Gauti hourly duomenis iš Shelly Cloud Pro ---
-def get_shelly_data(start: datetime, end: datetime):
-    data = {}
-    start_str = start.strftime("%Y-%m-%d")
-    end_str = end.strftime("%Y-%m-%d")
-    url = f"https://shelly-194-eu.shelly.cloud/device/{DEVICE_ID}/history"
-    params = {
-        "auth_key": AUTH_KEY,
-        "period": "hour",
-        "date_from": start_str,
-        "date_to": end_str
-    }
-
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        json_data = resp.json()
-        # Tiksliai Shelly Cloud Pro atsakymo struktūra:
-        # {"history":[{"date":"2025-08-01","hours":{"0":0.5,"1":0.4,...}}, ...]}
-        for day_entry in json_data.get("history", []):
-            day = day_entry["date"]
-            hours = {int(h): float(kwh) for h, kwh in day_entry.get("hours", {}).items()}
-            data[day] = hours
-    except Exception as e:
-        print("Klaida gaunant Shelly duomenis:", e)
-        # Jei klaida – užpildome 0
-        cur = start
-        while cur <= end:
-            d = cur.strftime("%Y-%m-%d")
-            data[d] = {h: 0 for h in range(24)}
-            cur += timedelta(days=1)
+# --- Funkcijos ---
+def read_csv_data(file_path):
+    """Perskaito CSV ir gražina listą dict su datetime ir Wh"""
+    data = []
+    with open(file_path, newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f, skipinitialspace=True)
+        for row in reader:
+            try:
+                dt = datetime.strptime(row['Time'], "%d/%m/%Y %H:%M")
+                wh = float(row['Wh'])
+                data.append({'datetime': dt, 'Wh': wh})
+            except:
+                continue
     return data
 
-# --- Apskaičiuoti dienų suvartojimą ---
-def calculate_consumption(start: datetime, end: datetime):
+def calculate_consumption(data):
+    """Suskaičiuoja kiekvienos dienos kWh ir kainą su dieniniu/naktiniu tarifu"""
     days = {}
-    shelly_data = get_shelly_data(start, end)
-    cur = start
-    while cur <= end:
-        d = cur.strftime("%Y-%m-%d")
-        weekday = cur.weekday()  # 0 = pirmadienis
-        hour = cur.hour
-        kwh = shelly_data.get(d, {}).get(hour, 0)
-        # Dieninis tarifas tik darbo dienomis 7-23
-        if weekday < 5 and 7 <= hour < 23:
-            price = kwh * DAY_TARIFF
-            day_kwh = kwh
-            night_kwh = 0
-        else:
+    for entry in data:
+        dt = entry['datetime']
+        wh = entry['Wh']
+        kwh = wh / 1000
+        weekday = dt.weekday()
+        hour = dt.hour
+
+        # Naktinis tarifas: savaitgaliai arba naktis darbo dienomis
+        if weekday >= 5 or hour < 7 or hour >= 23:
             price = kwh * NIGHT_TARIFF
-            day_kwh = 0
-            night_kwh = kwh
+            tariff_type = "Naktinis"
+        else:
+            price = kwh * DAY_TARIFF
+            tariff_type = "Dieninis"
+
+        d = dt.strftime("%Y-%m-%d")
         if d not in days:
-            days[d] = {"kwh": 0, "eur": 0, "day_kwh": 0, "night_kwh": 0}
+            days[d] = {"kwh": 0, "eur": 0}
         days[d]["kwh"] += kwh
         days[d]["eur"] += price
-        days[d]["day_kwh"] += day_kwh
-        days[d]["night_kwh"] += night_kwh
-        cur += timedelta(hours=1)
     return days
 
-# --- PDF generavimas ---
-def generate_pdf_report(days: dict, filename: str, title: str):
+def generate_pdf_report(days, filename, title):
     doc = SimpleDocTemplate(filename, pagesize=A4)
     styles = getSampleStyleSheet()
     elements = []
+
     elements.append(Paragraph(title, styles["Title"]))
     elements.append(Spacer(1, 12))
 
-    data_table = [["Data", "Suvartota kWh", "Kaina €", "Dieninis kWh", "Naktinis kWh"]]
-    total_kwh, total_eur, total_day, total_night = 0,0,0,0
+    data_table = [["Data", "Suvartota kWh", "Kaina €"]]
+    total_kwh, total_eur = 0, 0
     for d, vals in sorted(days.items()):
-        data_table.append([
-            d,
-            f"{vals['kwh']:.2f}",
-            f"{vals['eur']:.2f}",
-            f"{vals['day_kwh']:.2f}",
-            f"{vals['night_kwh']:.2f}"
-        ])
-        total_kwh += vals['kwh']
-        total_eur += vals['eur']
-        total_day += vals['day_kwh']
-        total_night += vals['night_kwh']
-    data_table.append(["Iš viso", f"{total_kwh:.2f}", f"{total_eur:.2f}", f"{total_day:.2f}", f"{total_night:.2f}"])
+        data_table.append([d, f"{vals['kwh']:.2f}", f"{vals['eur']:.2f}"])
+        total_kwh += vals["kwh"]
+        total_eur += vals["eur"]
+    data_table.append(["Iš viso", f"{total_kwh:.2f}", f"{total_eur:.2f}"])
 
     table = Table(data_table, hAlign="LEFT")
     table.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,0), colors.darkblue),
-        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
-        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.lightblue),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
     ]))
     elements.append(table)
     elements.append(Spacer(1, 24))
 
+    # grafikas
     dates = [d for d, _ in sorted(days.items())]
-    day_values = [vals['day_kwh'] for _, vals in sorted(days.items())]
-    night_values = [vals['night_kwh'] for _, vals in sorted(days.items())]
-
-    plt.figure(figsize=(10,4))
-    plt.bar(dates, night_values, color='blue', label='Naktinis')
-    plt.bar(dates, day_values, bottom=night_values, color='orange', label='Dieninis')
+    values = [vals["kwh"] for _, vals in sorted(days.items())]
+    plt.figure(figsize=(10, 5))
+    plt.bar(dates, values, color='skyblue')
     plt.xticks(rotation=45)
     plt.ylabel("kWh")
     plt.title(title)
-    plt.legend()
     plt.tight_layout()
 
     chart_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
     plt.savefig(chart_file.name)
     plt.close()
-    elements.append(Image(chart_file.name, width=500, height=250))
+    elements.append(Image(chart_file.name, width=400, height=200))
 
     doc.build(elements)
 
-# --- Siųsti PDF ---
 def send_email(pdf_file, subject):
     msg = MIMEMultipart()
     msg["From"] = EMAIL_USER
@@ -155,19 +122,33 @@ def send_email(pdf_file, subject):
         server.login(EMAIL_USER, EMAIL_PASS)
         server.send_message(msg)
 
-# --- Endpoint praėjusio mėnesio ataskaitai ---
+def get_previous_month_date_range():
+    today = datetime.now()
+    first_day_this_month = today.replace(day=1)
+    last_day_prev_month = first_day_this_month - timedelta(seconds=1)
+    start_prev_month = last_day_prev_month.replace(day=1, hour=0, minute=0, second=0)
+    end_prev_month = last_day_prev_month.replace(hour=23, minute=59, second=59)
+    return start_prev_month, end_prev_month
+
+def filter_data_for_previous_month(data):
+    start, end = get_previous_month_date_range()
+    return [d for d in data if start <= d['datetime'] <= end]
+
+# --- FastAPI routes ---
+@app.get("/")
+def home():
+    return {"status": "ok", "message": "Shelly CSV Reports Service veikia 🚀"}
+
 @app.get("/previous_month_report")
 def previous_month_report():
-    today = datetime.now()
-    first_day_this_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    last_day_prev_month = first_day_this_month - timedelta(seconds=1)
-    first_day_prev_month = last_day_prev_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-    days = calculate_consumption(first_day_prev_month, last_day_prev_month)
+    all_data = read_csv_data(CSV_FILE)
+    month_data = filter_data_for_previous_month(all_data)
+    days = calculate_consumption(month_data)
     pdf_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf").name
-    generate_pdf_report(days, pdf_file, f"Elektros ataskaita: {first_day_prev_month.strftime('%B %Y')}")
-    send_email(pdf_file, f"Elektros ataskaita: {first_day_prev_month.strftime('%B %Y')}")
-    return {"status": "ok", "message": f"Praėjusio mėnesio ataskaita ({first_day_prev_month.strftime('%B %Y')}) išsiųsta"}
+    title = f"Praėjusio mėnesio ataskaita ({get_previous_month_date_range()[0].strftime('%Y-%m')})"
+    generate_pdf_report(days, pdf_file, title)
+    send_email(pdf_file, title)
+    return {"status": "ok", "message": "Praėjusio mėnesio ataskaita išsiųsta"}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
