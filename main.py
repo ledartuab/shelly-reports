@@ -20,46 +20,49 @@ app = FastAPI(title="Shelly Reports Service")
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 EMAIL_TO   = os.getenv("EMAIL_TO")
-SHELLY_HOST = os.getenv("SHELLY_HOST")
-DEVICE_ID   = os.getenv("DEVICE_ID")
-AUTH_KEY    = os.getenv("AUTH_KEY")
+DEVICE_ID  = os.getenv("DEVICE_ID")
+AUTH_KEY   = os.getenv("AUTH_KEY")
 
 DAY_TARIFF = 0.305
 NIGHT_TARIFF = 0.255
 
-# --- Funkcija gauti hourly duomenis iš Shelly ---
+# --- Gauti hourly duomenis iš Shelly Cloud Pro ---
 def get_shelly_data(start: datetime, end: datetime):
     """
-    Gražina hourly suvartojimą per laikotarpį.
-    Formatu: {'2025-09-01': {0: 0.5, 1:0.6, ..., 23:0.7}, ...}
+    Gražina hourly kWh per dienas.
+    Formatu: {'YYYY-MM-DD': {0: 0.5, 1:0.6, ..., 23:0.7}, ...}
     """
     data = {}
-    cur = start
-    while cur <= end:
-        day_str = cur.strftime("%Y-%m-%d")
-        if day_str not in data:
-            data[day_str] = {}
-        hour = cur.hour
-        try:
-            url = f"https://{SHELLY_HOST}/device/status"
-            params = {"id": DEVICE_ID, "auth_key": AUTH_KEY, "date": day_str, "hour": hour}
-            resp = requests.get(url, params=params, timeout=5)
-            resp.raise_for_status()
-            json_data = resp.json()
-            kwh = json_data.get("kwh", 0)
-        except Exception:
-            kwh = 0
-        data[day_str][hour] = kwh
-        cur += timedelta(hours=1)
+    start_str = start.strftime("%Y-%m-%d")
+    end_str = end.strftime("%Y-%m-%d")
+    url = f"https://shelly-194-eu.shelly.cloud/device/{DEVICE_ID}/history"
+    params = {
+        "auth_key": AUTH_KEY,
+        "period": "hour",
+        "date_from": start_str,
+        "date_to": end_str
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        json_data = resp.json()
+        for day, hours in json_data.items():
+            data[day] = {int(h): float(kwh) for h, kwh in hours.items()}
+    except Exception as e:
+        print("Klaida gaunant Shelly duomenis:", e)
+        # jei klaida, demo duomenys
+        cur = start
+        while cur <= end:
+            d = cur.strftime("%Y-%m-%d")
+            data[d] = {h: 0 for h in range(24)}
+            cur += timedelta(days=1)
     return data
 
-# --- Funkcija apskaičiuoti dienų suvartojimą su tarifais ---
+# --- Apskaičiuoti dienų suvartojimą su tarifais ---
 def calculate_consumption(start: datetime, end: datetime):
     """
-    Apskaičiuoja kiekvienos dienos kWh ir kainą.
-    Dieninis tarifas: darbo dienos 7–23 val.
-    Naktinis tarifas: 23–7 val. arba savaitgaliai.
-    Grąžina dict: {'YYYY-MM-DD': {'kwh': x, 'eur': y, 'day_kwh': z, 'night_kwh': t}}
+    Dieninis/naktinis tarifas pagal darbo dienas/savaitgalius.
+    Grąžina: {'YYYY-MM-DD': {'kwh': x, 'eur': y, 'day_kwh': z, 'night_kwh': t}}
     """
     days = {}
     shelly_data = get_shelly_data(start, end)
@@ -86,7 +89,7 @@ def calculate_consumption(start: datetime, end: datetime):
         cur += timedelta(hours=1)
     return days
 
-# --- PDF generavimas su lentele ir spalvotu grafiku ---
+# --- PDF generavimas su lentele ir grafiku ---
 def generate_pdf_report(days: dict, filename: str, title: str):
     doc = SimpleDocTemplate(filename, pagesize=A4)
     styles = getSampleStyleSheet()
@@ -96,10 +99,10 @@ def generate_pdf_report(days: dict, filename: str, title: str):
     elements.append(Spacer(1, 12))
 
     # Lentelė
-    data = [["Data", "Suvartota kWh", "Kaina €", "Dieninis kWh", "Naktinis kWh"]]
-    total_kwh, total_eur, total_day, total_night = 0, 0, 0, 0
+    data_table = [["Data", "Suvartota kWh", "Kaina €", "Dieninis kWh", "Naktinis kWh"]]
+    total_kwh, total_eur, total_day, total_night = 0,0,0,0
     for d, vals in sorted(days.items()):
-        data.append([
+        data_table.append([
             d,
             f"{vals['kwh']:.2f}",
             f"{vals['eur']:.2f}",
@@ -110,9 +113,9 @@ def generate_pdf_report(days: dict, filename: str, title: str):
         total_eur += vals['eur']
         total_day += vals['day_kwh']
         total_night += vals['night_kwh']
-    data.append(["Iš viso", f"{total_kwh:.2f}", f"{total_eur:.2f}", f"{total_day:.2f}", f"{total_night:.2f}"])
+    data_table.append(["Iš viso", f"{total_kwh:.2f}", f"{total_eur:.2f}", f"{total_day:.2f}", f"{total_night:.2f}"])
 
-    table = Table(data, hAlign="LEFT")
+    table = Table(data_table, hAlign="LEFT")
     table.setStyle(TableStyle([
         ("BACKGROUND", (0,0), (-1,0), colors.darkblue),
         ("TEXTCOLOR", (0,0), (-1,0), colors.white),
@@ -121,10 +124,10 @@ def generate_pdf_report(days: dict, filename: str, title: str):
     elements.append(table)
     elements.append(Spacer(1, 24))
 
-    # Grafikas su dieniniu ir naktiniu
+    # Grafikas
     dates = [d for d, _ in sorted(days.items())]
-    day_values = [vals["day_kwh"] for _, vals in sorted(days.items())]
-    night_values = [vals["night_kwh"] for _, vals in sorted(days.items())]
+    day_values = [vals['day_kwh'] for _, vals in sorted(days.items())]
+    night_values = [vals['night_kwh'] for _, vals in sorted(days.items())]
 
     plt.figure(figsize=(10,4))
     plt.bar(dates, night_values, color='blue', label='Naktinis')
@@ -166,7 +169,7 @@ def home():
 @app.get("/weekly_report")
 def weekly_report():
     today = datetime.now()
-    start = today - timedelta(days=today.weekday())  # pirmadienis
+    start = today - timedelta(days=today.weekday())
     end = start + timedelta(days=6, hours=23, minutes=59)
     days = calculate_consumption(start, end)
     pdf_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf").name
@@ -190,4 +193,3 @@ def monthly_report():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
-
