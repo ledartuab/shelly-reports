@@ -162,7 +162,7 @@ def send_email(pdf_file, subject):
         server.send_message(msg)
 
 # --- Endpoint praėjusio mėnesio ataskaitai ---
-@app.get("/previous_month_report")
+@app.get("/monthly_report")
 def previous_month_report():
     today = datetime.now()
     first_day_this_month = today.replace(day=1)
@@ -178,3 +178,4 @@ def previous_month_report():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
