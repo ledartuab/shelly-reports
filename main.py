@@ -13,7 +13,7 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 import uvicorn
 
-# --- FastAPI aplikacija ---
+# --- FastAPI ---
 app = FastAPI(title="Shelly Reports Service")
 
 # --- Aplinkos kintamieji ---
@@ -26,7 +26,7 @@ AUTH_KEY   = os.getenv("AUTH_KEY")
 DAY_TARIFF = 0.305
 NIGHT_TARIFF = 0.255
 
-# --- Gauti hourly duomenis iš Shelly Cloud Pro ---
+# --- Gauti hourly duomenis iš Shelly Cloud Pro (EMData) ---
 def get_shelly_data(start: datetime, end: datetime):
     """
     Gražina hourly kWh per dienas.
@@ -50,7 +50,7 @@ def get_shelly_data(start: datetime, end: datetime):
             data[day] = {int(h): float(kwh) for h, kwh in hours.items()}
     except Exception as e:
         print("Klaida gaunant Shelly duomenis:", e)
-        # jei klaida, demo duomenys
+        # Jei klaida, demo duomenys
         cur = start
         while cur <= end:
             d = cur.strftime("%Y-%m-%d")
@@ -161,33 +161,18 @@ def send_email(pdf_file, subject):
         server.login(EMAIL_USER, EMAIL_PASS)
         server.send_message(msg)
 
-# --- FastAPI endpoint'ai ---
-@app.get("/")
-def home():
-    return {"status": "ok", "message": "Shelly Reports Service veikia 🚀"}
-
-@app.get("/weekly_report")
-def weekly_report():
+# --- Endpoint praėjusio mėnesio ataskaitai ---
+@app.get("/previous_month_report")
+def previous_month_report():
     today = datetime.now()
-    start = today - timedelta(days=today.weekday())
-    end = start + timedelta(days=6, hours=23, minutes=59)
-    days = calculate_consumption(start, end)
+    first_day_this_month = today.replace(day=1)
+    last_day_prev_month = first_day_this_month - timedelta(seconds=1)
+    first_day_prev_month = last_day_prev_month.replace(day=1)
+    days = calculate_consumption(first_day_prev_month, last_day_prev_month)
     pdf_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf").name
-    generate_pdf_report(days, pdf_file, "Savaitinė elektros ataskaita")
-    send_email(pdf_file, "Savaitinė elektros ataskaita")
-    return {"status": "ok", "message": "Savaitinė ataskaita išsiųsta"}
-
-@app.get("/monthly_report")
-def monthly_report():
-    today = datetime.now()
-    start = today.replace(day=1, hour=0, minute=0)
-    next_month = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
-    end = next_month - timedelta(seconds=1)
-    days = calculate_consumption(start, end)
-    pdf_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf").name
-    generate_pdf_report(days, pdf_file, "Mėnesio elektros ataskaita")
-    send_email(pdf_file, "Mėnesio ataskaita")
-    return {"status": "ok", "message": "Mėnesio ataskaita išsiųsta"}
+    generate_pdf_report(days, pdf_file, f"Elektros ataskaita: {first_day_prev_month.strftime('%B %Y')}")
+    send_email(pdf_file, f"Elektros ataskaita: {first_day_prev_month.strftime('%B %Y')}")
+    return {"status": "ok", "message": "Praėjusio mėnesio ataskaita išsiųsta"}
 
 # --- Uvicorn ---
 if __name__ == "__main__":
