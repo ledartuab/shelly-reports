@@ -15,7 +15,7 @@ import uvicorn
 
 app = FastAPI(title="Shelly Reports Service")
 
-# Aplinkos kintamieji
+# --- Aplinkos kintamieji ---
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 EMAIL_TO   = os.getenv("EMAIL_TO")
@@ -25,7 +25,7 @@ AUTH_KEY   = os.getenv("AUTH_KEY")
 DAY_TARIFF = 0.305
 NIGHT_TARIFF = 0.255
 
-# --- Shelly Cloud Pro hourly duomenys ---
+# --- Gauti hourly duomenis iš Shelly Cloud Pro ---
 def get_shelly_data(start: datetime, end: datetime):
     data = {}
     start_str = start.strftime("%Y-%m-%d")
@@ -149,19 +149,18 @@ def send_email(pdf_file, subject):
         server.send_message(msg)
 
 # --- Endpoint praėjusio mėnesio ataskaitai ---
-@app.get("/monthly_report")
+@app.get("/previous_month_report")
 def previous_month_report():
     today = datetime.now()
-    first_day_this_month = today.replace(day=1)
+    first_day_this_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     last_day_prev_month = first_day_this_month - timedelta(seconds=1)
-    first_day_prev_month = last_day_prev_month.replace(day=1)
+    first_day_prev_month = last_day_prev_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     days = calculate_consumption(first_day_prev_month, last_day_prev_month)
     pdf_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf").name
     generate_pdf_report(days, pdf_file, f"Elektros ataskaita: {first_day_prev_month.strftime('%B %Y')}")
     send_email(pdf_file, f"Elektros ataskaita: {first_day_prev_month.strftime('%B %Y')}")
-    return {"status": "ok", "message": "Praėjusio mėnesio ataskaita išsiųsta"}
+    return {"status": "ok", "message": f"Praėjusio mėnesio ataskaita ({first_day_prev_month.strftime('%B %Y')}) išsiųsta"}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
-
