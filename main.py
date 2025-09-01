@@ -17,6 +17,28 @@ import uvicorn
 # FastAPI aplikacija
 app = FastAPI(title="Shelly Reports Service")
 
+import os
+import smtplib
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/smtp_test")
+def smtp_test():
+    user = os.environ.get("EMAIL_USER")
+    pwd = os.environ.get("EMAIL_PASS")
+
+    if not user or not pwd:
+        return {"ok": False, "error": "EMAIL_USER or EMAIL_PASS missing"}
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
+            server.login(user, pwd)
+        return {"ok": True, "user": user}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # --- Aplinkos kintamieji ---
 EMAIL_USER = os.getenv("ledartuab@gmail.com")
 EMAIL_PASS = os.getenv("ahiuzhqonqqdkesf")
@@ -154,3 +176,4 @@ def monthly_report():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
