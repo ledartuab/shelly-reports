@@ -37,14 +37,20 @@ def get_shelly_data(start: datetime, end: datetime):
         "date_from": start_str,
         "date_to": end_str
     }
+
     try:
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
         json_data = resp.json()
-        for day, hours in json_data.items():
-            data[day] = {int(h): float(kwh) for h, kwh in hours.items()}
+        # Tiksliai Shelly Cloud Pro atsakymo struktūra:
+        # {"history":[{"date":"2025-08-01","hours":{"0":0.5,"1":0.4,...}}, ...]}
+        for day_entry in json_data.get("history", []):
+            day = day_entry["date"]
+            hours = {int(h): float(kwh) for h, kwh in day_entry.get("hours", {}).items()}
+            data[day] = hours
     except Exception as e:
         print("Klaida gaunant Shelly duomenis:", e)
+        # Jei klaida – užpildome 0
         cur = start
         while cur <= end:
             d = cur.strftime("%Y-%m-%d")
@@ -59,9 +65,10 @@ def calculate_consumption(start: datetime, end: datetime):
     cur = start
     while cur <= end:
         d = cur.strftime("%Y-%m-%d")
-        weekday = cur.weekday()
+        weekday = cur.weekday()  # 0 = pirmadienis
         hour = cur.hour
         kwh = shelly_data.get(d, {}).get(hour, 0)
+        # Dieninis tarifas tik darbo dienomis 7-23
         if weekday < 5 and 7 <= hour < 23:
             price = kwh * DAY_TARIFF
             day_kwh = kwh
@@ -155,6 +162,7 @@ def previous_month_report():
     first_day_this_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     last_day_prev_month = first_day_this_month - timedelta(seconds=1)
     first_day_prev_month = last_day_prev_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
     days = calculate_consumption(first_day_prev_month, last_day_prev_month)
     pdf_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf").name
     generate_pdf_report(days, pdf_file, f"Elektros ataskaita: {first_day_prev_month.strftime('%B %Y')}")
