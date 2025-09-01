@@ -40,12 +40,12 @@ def smtp_test():
 
 
 # --- Aplinkos kintamieji ---
-EMAIL_USER = os.getenv("ledartuab@gmail.com")
-EMAIL_PASS = os.getenv("ahiuzhqonqqdkesf")
-EMAIL_TO   = os.getenv("petras@ledart.lt")
-SHELLY_HOST = os.getenv("shelly-194-eu.shelly.cloud")
-DEVICE_ID   = os.getenv("ece334ead5dc")
-AUTH_KEY    = os.getenv("MzQ2YWJmdWlk0F428DE366B537A585CF8B251087C642B7615A5590F1D1824894430A1BE25024353D85D4AF79EA89")
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASS = os.getenv("EMAIL_PASS")
+EMAIL_TO   = os.getenv("EMAIL_TO")
+SHELLY_HOST = os.getenv("SHELLY_HOST")
+DEVICE_ID   = os.getenv("DEVICE_ID")
+AUTH_KEY    = os.getenv("AUTH_KEY")
 
 DAY_TARIFF = 0.305
 NIGHT_TARIFF = 0.255
@@ -176,4 +176,5 @@ def monthly_report():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+
 
